@@ -414,6 +414,8 @@ def Convolution(filter_shape,     # shape of receptive field, e.g. (3,3)
         raise NotImplementedError("Convolution: sharing option currently must be True")
     if (groups <= 0):
         raise ValueError("Convolution: groups must be strictly positive, i.e. groups > 0.")
+    if (groups > 1):
+        raise ValueError("Convolution: groups > 1, is not currently supported by Convolution layer. For group convolution with groups > 1, use CNTK's low-level convolution node (cntk.convolution).")
     # The convolution() function currently requires exactly one input and one output depth axis.
     # So we emulate those dimensions on this level. TODO: Once this is suppored by the C++ code, remove the emulation here.
     emulating_output_depth = num_filters == ()
@@ -1247,15 +1249,19 @@ def BatchNormalization(map_rank=default_override_or(None),  # if given then norm
     use_cntk_engine             = get_default_override(BatchNormalization, use_cntk_engine=use_cntk_engine)
     disable_regularization      = get_default_override(BatchNormalization, disable_regularization=disable_regularization)
 
+    # for fp16 batch_normalization, we need to use fp32 statistics
+    dtype = get_default_override(None, dtype=default_override_or(np.float32))
+    stat_dtype = np.float32 if dtype == np.float16 or dtype == 'float16' else dtype
+    
     # parameters bound to this Function
     norm_shape  = _INFERRED
     if map_rank is not None and map_rank != 1:
         UntestedBranchError("BatchNormalization map_rank can only be 1 or None for now")
-    scale        = Parameter(norm_shape, init=init_scale, name='scale')
-    bias         = Parameter(norm_shape, init=0,          name='bias')
-    run_mean     = Constant(0, shape=norm_shape, name='aggregate_mean')  # note: these are not really constants; they are updated differently
-    run_variance = Constant(0, shape=norm_shape, name='aggregate_variance')
-    run_count    = Constant(0, shape=(),         name='aggregate_count')
+    scale        = Parameter(norm_shape, init=init_scale, dtype=stat_dtype, name='scale')
+    bias         = Parameter(norm_shape, init=0,          dtype=stat_dtype, name='bias')
+    run_mean     = Constant(0, shape=norm_shape, dtype=stat_dtype, name='aggregate_mean')  # note: these are not really constants; they are updated differently
+    run_variance = Constant(0, shape=norm_shape, dtype=stat_dtype, name='aggregate_variance')
+    run_count    = Constant(0, shape=(),         dtype=stat_dtype, name='aggregate_count')
 
     # expression
     @BlockFunction('BatchNormalization', name)
@@ -1274,7 +1280,7 @@ def LayerNormalization(initial_scale=1, initial_bias=0, epsilon=default_override
 
     Layer normalization applies this formula to every input element (element-wise):
     ``y = (x - mean(x)) / (stddev(x) + epsilon) * scale + bias``
-    where ``scale`` and ``bias`` are learned scalar parameters.
+    where ``scale`` and ``bias`` are learned parameters of the same dimention as the input/output.
 
     Example:
      >>> f = LayerNormalization(initial_scale=2, initial_bias=1)
@@ -1298,8 +1304,8 @@ def LayerNormalization(initial_scale=1, initial_bias=0, epsilon=default_override
     epsilon = get_default_override(LayerNormalization, epsilon=epsilon)
 
     # parameters bound to this Function
-    scale = Parameter((), init=initial_scale, name='scale')  # TODO: if this gets usage then offer a Softplus version like Stabilizer() for stability?
-    bias  = Parameter((), init=initial_bias,  name='bias')
+    scale = Parameter(_INFERRED, init=initial_scale, name='scale')  # TODO: if this gets usage then offer a Softplus version like Stabilizer() for stability?
+    bias  = Parameter(_INFERRED, init=initial_bias,  name='bias')
 
     # expression
     @BlockFunction('LayerNormalization', name)
